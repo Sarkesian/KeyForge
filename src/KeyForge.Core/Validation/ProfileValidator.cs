@@ -1,4 +1,5 @@
 using KeyForge.Core.Keyboard;
+using KeyForge.Core.Input;
 using KeyForge.Core.Models;
 
 namespace KeyForge.Core.Validation;
@@ -46,10 +47,10 @@ public sealed class ProfileValidator
 
         foreach (var duplicate in profile.Bindings
                      .Where(binding => !string.IsNullOrWhiteSpace(binding.Input))
-                     .GroupBy(binding => KeyCatalog.Normalize(binding.Input), StringComparer.OrdinalIgnoreCase)
+                     .GroupBy(binding => InputCatalog.Normalize(binding.Input), StringComparer.OrdinalIgnoreCase)
                      .Where(group => group.Count() > 1))
         {
-            result.Add(ValidationSeverity.Error, $"Multiple bindings use {KeyCatalog.LabelFor(duplicate.Key)}.", "bindings");
+            result.Add(ValidationSeverity.Error, $"Multiple bindings use {InputCatalog.LabelFor(duplicate.Key)}.", "bindings");
         }
 
         foreach (var binding in profile.Bindings)
@@ -62,9 +63,9 @@ public sealed class ProfileValidator
 
     public static void ReplaceBinding(KeyForgeProfile profile, KeyBinding binding)
     {
-        var normalizedInput = KeyCatalog.Normalize(binding.Input);
+        var normalizedInput = InputCatalog.Normalize(binding.Input);
         profile.Bindings.RemoveAll(existing =>
-            string.Equals(KeyCatalog.Normalize(existing.Input), normalizedInput, StringComparison.OrdinalIgnoreCase));
+            string.Equals(InputCatalog.Normalize(existing.Input), normalizedInput, StringComparison.OrdinalIgnoreCase));
         profile.Bindings.Add(binding);
         profile.ModifiedAt = DateTimeOffset.UtcNow;
     }
@@ -77,16 +78,16 @@ public sealed class ProfileValidator
             return;
         }
 
-        binding.Input = KeyCatalog.Normalize(binding.Input);
-        if (!KeyCatalog.IsKnown(binding.Input))
+        binding.Input = InputCatalog.Normalize(binding.Input);
+        if (!InputCatalog.IsKnown(binding.Input))
         {
-            result.Add(ValidationSeverity.Error, $"Unknown input key: {binding.Input}.", "bindings.input");
+            result.Add(ValidationSeverity.Error, $"Unknown input target: {binding.Input}.", "bindings.input");
         }
 
-        if (KeyCatalog.IsRisky(binding.Input))
+        if (InputCatalog.IsRisky(binding.Input))
         {
             result.Add(ValidationSeverity.Warning,
-                $"Remapping {KeyCatalog.LabelFor(binding.Input)} can affect desktop or game shortcuts while the profile is active.",
+                $"Remapping {InputCatalog.LabelFor(binding.Input)} can affect desktop or game shortcuts while the profile is active.",
                 "bindings.input");
         }
 
@@ -148,14 +149,14 @@ public sealed class ProfileValidator
 
         if (string.IsNullOrWhiteSpace(step.Key))
         {
-            result.Add(ValidationSeverity.Error, "Keyboard macro steps require a key.", "bindings.output.key");
+            result.Add(ValidationSeverity.Error, "Macro steps require a target.", "bindings.output.key");
             return;
         }
 
-        step.Key = KeyCatalog.Normalize(step.Key);
-        if (!KeyCatalog.IsKnown(step.Key))
+        step.Key = InputCatalog.Normalize(step.Key);
+        if (!InputCatalog.IsKnown(step.Key))
         {
-            result.Add(ValidationSeverity.Error, $"Unknown output key: {step.Key}.", "bindings.output.key");
+            result.Add(ValidationSeverity.Error, $"Unknown output target: {step.Key}.", "bindings.output.key");
         }
     }
 

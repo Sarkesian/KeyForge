@@ -1,4 +1,4 @@
-using KeyForge.Core.Keyboard;
+using KeyForge.Core.Input;
 using KeyForge.Core.Models;
 
 namespace KeyForge.Core.Services;
@@ -32,11 +32,11 @@ public static class BindingFormatter
         {
             if (step.Action == MacroStepAction.Press && !string.IsNullOrWhiteSpace(step.Key))
             {
-                parts.Add(KeyCatalog.LabelFor(step.Key));
+                parts.Add(InputCatalog.LabelFor(step.Key));
             }
             else if (step.Action == MacroStepAction.KeyDown && !string.IsNullOrWhiteSpace(step.Key))
             {
-                parts.Add(KeyCatalog.LabelFor(step.Key));
+                parts.Add(InputCatalog.LabelFor(step.Key));
             }
         }
 
@@ -48,9 +48,9 @@ public static class BindingFormatter
         var formatted = step.Action switch
         {
             MacroStepAction.Wait => $"wait {step.DelayMs ?? 0}ms",
-            MacroStepAction.KeyDown => $"{KeyCatalog.LabelFor(step.Key)} down",
-            MacroStepAction.KeyUp => $"{KeyCatalog.LabelFor(step.Key)} up",
-            _ => KeyCatalog.LabelFor(step.Key)
+            MacroStepAction.KeyDown => $"{InputCatalog.LabelFor(step.Key)} down",
+            MacroStepAction.KeyUp => $"{InputCatalog.LabelFor(step.Key)} up",
+            _ => InputCatalog.LabelFor(step.Key)
         };
 
         if (step.Action != MacroStepAction.Wait && step.DelayMs is > 0)

@@ -27,6 +27,7 @@ $singleInstallerDir = Join-Path $root "artifacts\installer"
 $defaultReleaseNotesPath = Join-Path $root "artifacts\release-notes.md"
 $appProject = Join-Path $root "src\KeyForge.App\KeyForge.App.csproj"
 $iconPath = Join-Path $root "Icon\KFIcon.ico"
+$runtimeDependency = "net9-x64-desktop"
 
 function Get-KeyForgeVersion {
     [xml]$props = Get-Content -Raw -LiteralPath $propsPath
@@ -82,7 +83,7 @@ Official KeyForge release $Version.
 dotnet publish $appProject `
     --configuration $Configuration `
     --runtime win-x64 `
-    --self-contained true `
+    --self-contained false `
     -p:PublishSingleFile=false `
     -p:DebugType=None `
     -p:DebugSymbols=false `
@@ -131,6 +132,7 @@ $packArgs = @(
     "--channel", "win",
     "--runtime", "win-x64",
     "--icon", $iconPath,
+    "--framework", $runtimeDependency,
     "--releaseNotes", $ReleaseNotesPath,
     "--instLocation", "PerUser",
     "--shortcuts", "Desktop,StartMenuRoot",

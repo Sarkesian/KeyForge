@@ -25,7 +25,7 @@ The tests cover profile validation, JSON round-tripping, active profile matching
 .\scripts\publish-velopack.ps1 -SkipPreviousDownload
 ```
 
-The official distribution path publishes a self-contained `win-x64` app and builds Velopack setup/update artifacts in `artifacts\velopack`. Public releases should be created from tags named `vX.Y.Z` where `X.Y.Z` matches `Directory.Build.props`.
+The official distribution path publishes a framework-dependent `win-x64` app and builds Velopack setup/update artifacts in `artifacts\velopack`. The Velopack setup declares the .NET 9 x64 Desktop Runtime prerequisite so the app stays fully functional without bundling the full runtime into `KeyForge-Setup.exe`. Public releases should be created from tags named `vX.Y.Z` where `X.Y.Z` matches `Directory.Build.props`.
 
 For manual distribution or smoke testing on another Windows x64 PC, send the single installer copied to:
 

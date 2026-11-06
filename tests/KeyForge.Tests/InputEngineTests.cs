@@ -1,4 +1,5 @@
 using KeyForge.Core.Models;
+using KeyForge.Core.Input;
 using KeyForge.Input;
 using System.Runtime.InteropServices;
 
@@ -38,9 +39,34 @@ public sealed class InputEngineTests
     }
 
     [Fact]
+    public async Task MacroRunnerEmitsMixedKeyboardAndMouseStepsInOrder()
+    {
+        var input = new FakeInputSender();
+        var runner = new MacroRunner(input, new AppSettings { MacroMinimumDelayMs = 20 });
+
+        await runner.RunAsync(
+        [
+            MacroStep.KeyDown("LeftShift"),
+            MacroStep.Press("Space"),
+            MacroStep.Press(InputCatalog.MouseRight),
+            MacroStep.KeyUp("LeftShift")
+        ]);
+
+        Assert.Equal(
+        [
+            "down:LeftShift",
+            "down:Space",
+            "up:Space",
+            "down:MouseRight",
+            "up:MouseRight",
+            "up:LeftShift"
+        ], input.Log);
+    }
+
+    [Fact]
     public void RemappingEngineIgnoresInjectedInput()
     {
-        var hook = new FakeKeyboardHook();
+        var hook = new FakeInputHook();
         var input = new FakeInputSender();
         var engine = CreateEngine(hook, input, new AppSettings { IgnoreInjectedInput = true });
         engine.SetActiveProfile(CreateSimpleProfile());
@@ -53,9 +79,67 @@ public sealed class InputEngineTests
     }
 
     [Fact]
+    public void RemappingEngineIgnoresInjectedMouseInput()
+    {
+        var hook = new FakeInputHook();
+        var input = new FakeInputSender();
+        var engine = CreateEngine(hook, input, new AppSettings { IgnoreInjectedInput = true });
+        engine.SetActiveProfile(new KeyForgeProfile
+        {
+            ProfileName = "Mouse",
+            Bindings =
+            [
+                new KeyBinding
+                {
+                    Input = InputCatalog.MouseRight,
+                    Type = BindingType.Simple,
+                    BlockOriginal = true,
+                    Output = [MacroStep.Press("B")]
+                }
+            ]
+        });
+        engine.Start();
+
+        var args = hook.Raise(InputCatalog.MouseRight, isDown: true, isInjected: true);
+
+        Assert.False(args.Suppress);
+        Assert.Empty(input.Log);
+    }
+
+    [Fact]
+    public void RemappingEngineSupportsMouseButtonTriggers()
+    {
+        var hook = new FakeInputHook();
+        var input = new FakeInputSender();
+        var engine = CreateEngine(hook, input, new AppSettings { IgnoreInjectedInput = true });
+        engine.SetActiveProfile(new KeyForgeProfile
+        {
+            ProfileName = "Mouse",
+            Bindings =
+            [
+                new KeyBinding
+                {
+                    Input = InputCatalog.MouseRight,
+                    Type = BindingType.Simple,
+                    BlockOriginal = true,
+                    Output = [MacroStep.Press("B")]
+                }
+            ]
+        });
+        engine.Start();
+
+        var down = hook.Raise(InputCatalog.MouseRight, isDown: true, isInjected: false);
+        var up = hook.Raise(InputCatalog.MouseRight, isDown: false, isInjected: false);
+
+        Assert.True(down.Suppress);
+        Assert.True(up.Suppress);
+        Assert.Equal(["down:B", "up:B"], input.Log);
+    }
+
+    [Fact]
     public void RemappingEngineSuppressesAndHoldsSimpleRemap()
     {
-        var hook = new FakeKeyboardHook();
+        var hook = new FakeInputHook();
         var input = new FakeInputSender();
         var engine = CreateEngine(hook, input, new AppSettings { IgnoreInjectedInput = true });
         engine.SetActiveProfile(CreateSimpleProfile());
@@ -72,7 +156,7 @@ public sealed class InputEngineTests
     [Fact]
     public void RemappingEngineUsesFirstActiveProfileBindingForConflicts()
     {
-        var hook = new FakeKeyboardHook();
+        var hook = new FakeInputHook();
         var input = new FakeInputSender();
         var engine = CreateEngine(hook, input, new AppSettings { IgnoreInjectedInput = true });
         var foreground = CreateSimpleProfile();
@@ -113,7 +197,7 @@ public sealed class InputEngineTests
     [Fact]
     public void EmergencyDisablePausesEngineAndReleasesKeys()
     {
-        var hook = new FakeKeyboardHook();
+        var hook = new FakeInputHook();
         var input = new FakeInputSender();
         var engine = CreateEngine(hook, input, new AppSettings());
         engine.SetActiveProfile(CreateSimpleProfile());
@@ -129,7 +213,26 @@ public sealed class InputEngineTests
         Assert.Contains("up:B", input.Log);
     }
 
-    private static RemappingEngine CreateEngine(FakeKeyboardHook hook, FakeInputSender input, AppSettings settings)
+    [Fact]
+    public void ReleaseAllReleasesHeldKeyboardAndMouseInputs()
+    {
+        var input = new FakeInputSender();
+
+        input.InputDown("LeftShift");
+        input.InputDown(InputCatalog.MouseRight);
+        input.ReleaseAll();
+
+        Assert.Equal(
+        [
+            "down:LeftShift",
+            "down:MouseRight",
+            "up:MouseRight",
+            "up:LeftShift"
+        ], input.Log);
+        Assert.Empty(input.PressedInputs);
+    }
+
+    private static RemappingEngine CreateEngine(FakeInputHook hook, FakeInputSender input, AppSettings settings)
     {
         return new RemappingEngine(hook, input, new MacroRunner(input, settings), settings);
     }
@@ -153,9 +256,9 @@ public sealed class InputEngineTests
         };
     }
 
-    private sealed class FakeKeyboardHook : IKeyboardHook
+    private sealed class FakeInputHook : IInputHook
     {
-        public event EventHandler<KeyboardHookEventArgs>? KeyEvent;
+        public event EventHandler<InputHookEventArgs>? InputEvent;
 
         public bool IsRunning { get; private set; }
 
@@ -163,10 +266,10 @@ public sealed class InputEngineTests
 
         public void Stop() => IsRunning = false;
 
-        public KeyboardHookEventArgs Raise(string key, bool isDown, bool isInjected)
+        public InputHookEventArgs Raise(string input, bool isDown, bool isInjected)
         {
-            var args = new KeyboardHookEventArgs(key, isDown, isInjected, 0);
-            KeyEvent?.Invoke(this, args);
+            var args = new InputHookEventArgs(input, isDown, isInjected, 0);
+            InputEvent?.Invoke(this, args);
             return args;
         }
 
@@ -182,32 +285,32 @@ public sealed class InputEngineTests
 
         public List<string> Log { get; } = [];
 
-        public IReadOnlyCollection<string> PressedKeys => _pressed.ToList().AsReadOnly();
+        public IReadOnlyCollection<string> PressedInputs => _pressed.ToList().AsReadOnly();
 
-        public void KeyDown(string key)
+        public void InputDown(string input)
         {
-            _pressed.Add(key);
-            Log.Add($"down:{key}");
+            _pressed.Add(input);
+            Log.Add($"down:{input}");
         }
 
-        public void KeyUp(string key)
+        public void InputUp(string input)
         {
-            _pressed.Remove(key);
-            Log.Add($"up:{key}");
+            _pressed.Remove(input);
+            Log.Add($"up:{input}");
         }
 
-        public async Task PressAsync(string key, int holdMs = 12, CancellationToken cancellationToken = default)
+        public async Task PressInputAsync(string input, int holdMs = 12, CancellationToken cancellationToken = default)
         {
-            KeyDown(key);
+            InputDown(input);
             await Task.Delay(1, cancellationToken);
-            KeyUp(key);
+            InputUp(input);
         }
 
         public void ReleaseAll()
         {
-            foreach (var key in _pressed.Reverse().ToList())
+            foreach (var input in _pressed.Reverse().ToList())
             {
-                KeyUp(key);
+                InputUp(input);
             }
         }
     }

@@ -11,6 +11,7 @@ using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using KeyForge.Core.Keyboard;
+using KeyForge.Core.Input;
 using KeyForge.Core.Models;
 using KeyForge.Core.Services;
 using KeyForge.Core.Validation;
@@ -40,6 +41,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<KeyForgeProfile> _filteredProfiles = [];
     private readonly ObservableCollection<MacroStep> _macroSteps = [];
     private readonly Dictionary<string, WpfButton> _keyboardButtons = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, WpfButton> _mouseButtons = new(StringComparer.OrdinalIgnoreCase);
     private readonly IProfileRepository _profileRepository = new JsonProfileRepository();
     private readonly ISettingsRepository _settingsRepository = new JsonSettingsRepository();
     private readonly IForegroundAppDetector _foregroundAppDetector = new Win32ForegroundAppDetector();
@@ -56,7 +58,7 @@ public partial class MainWindow : Window
     ];
 
     private AppSettings _settings = new();
-    private LowLevelKeyboardHookService? _keyboardHook;
+    private CompositeInputHookService? _inputHook;
     private SendInputSender? _inputSender;
     private MacroRunner? _macroRunner;
     private RemappingEngine? _remappingEngine;
@@ -90,7 +92,7 @@ public partial class MainWindow : Window
         BindingTypeComboBox.ItemsSource = Enum.GetValues<BindingType>();
         MacroActionComboBox.ItemsSource = Enum.GetValues<MacroStepAction>();
         ThemeComboBox.ItemsSource = _themePresets;
-        MacroKeyComboBox.ItemsSource = KeyCatalog.All.OrderBy(key => key.Label).ToList();
+        MacroKeyComboBox.ItemsSource = InputCatalog.All;
         MacroStepsListBox.ItemsSource = _macroSteps;
         DiagnosticsLogListBox.ItemsSource = _diagnosticMessages;
         DiagnosticsProfilePathText.Text = Path.Combine(
@@ -150,10 +152,12 @@ public partial class MainWindow : Window
 
     private void InitializeRemappingEngine()
     {
-        _keyboardHook = new LowLevelKeyboardHookService();
+        _inputHook = new CompositeInputHookService(
+            new LowLevelKeyboardHookService(),
+            new LowLevelMouseHookService());
         _inputSender = new SendInputSender();
         _macroRunner = new MacroRunner(_inputSender, _settings);
-        _remappingEngine = new RemappingEngine(_keyboardHook, _inputSender, _macroRunner, _settings);
+        _remappingEngine = new RemappingEngine(_inputHook, _inputSender, _macroRunner, _settings);
         _remappingEngine.StatusChanged += (_, status) =>
             Dispatcher.BeginInvoke(() =>
             {
@@ -174,7 +178,7 @@ public partial class MainWindow : Window
             UpdateGlobalStatus($"Input hook unavailable: {ex.Message}");
             WpfMessageBox.Show(
                 this,
-                $"KeyForge opened, but the global keyboard hook could not start.\n\n{ex.Message}",
+                $"KeyForge opened, but global input capture could not start.\n\n{ex.Message}",
                 "Input Hook",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
@@ -185,6 +189,7 @@ public partial class MainWindow : Window
     {
         KeyboardHost.Children.Clear();
         _keyboardButtons.Clear();
+        _mouseButtons.Clear();
         const double keyWidth = 48;
         const double keyHeight = 42;
         const double gap = 5;
@@ -222,6 +227,30 @@ public partial class MainWindow : Window
             maxBottom = Math.Max(maxBottom, top + height);
         }
 
+        foreach (var mouseButton in InputCatalog.MouseVisualButtons)
+        {
+            var width = mouseButton.Width * keyWidth + Math.Max(0, mouseButton.Width - 1) * gap;
+            var height = mouseButton.Height * keyHeight + Math.Max(0, mouseButton.Height - 1) * rowGap;
+            var left = mouseButton.X * xStep;
+            var top = mouseButton.Y * yStep;
+            var button = new WpfButton
+            {
+                Width = width,
+                Height = height,
+                Tag = mouseButton.Code,
+                FontWeight = FontWeights.SemiBold,
+                ToolTip = InputCatalog.LabelFor(mouseButton.Code),
+                Padding = new Thickness(2)
+            };
+            button.Click += KeyboardButton_Click;
+            Canvas.SetLeft(button, left);
+            Canvas.SetTop(button, top);
+            canvas.Children.Add(button);
+            _mouseButtons[mouseButton.Code] = button;
+            maxRight = Math.Max(maxRight, left + width);
+            maxBottom = Math.Max(maxBottom, top + height);
+        }
+
         canvas.Width = maxRight;
         canvas.Height = maxBottom;
         KeyboardHost.Width = maxRight;
@@ -243,7 +272,7 @@ public partial class MainWindow : Window
             ProfileListBox.SelectedItem = activeProfile;
         }
 
-        _selectedKey = key;
+        _selectedKey = InputCatalog.Normalize(key);
         LoadSelectedBinding();
         UpdateKeyboardVisuals();
         if (_selectedProfile is not null)
@@ -667,7 +696,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            var key = MacroKeyComboBox.SelectedValue as string ?? KeyCatalog.All.First().Code;
+            var key = MacroKeyComboBox.SelectedValue as string ?? InputCatalog.All.First().Code;
             step = action switch
             {
                 MacroStepAction.KeyDown => MacroStep.KeyDown(key),
@@ -766,7 +795,7 @@ public partial class MainWindow : Window
         }
 
         _selectedProfile.Bindings.RemoveAll(binding =>
-            string.Equals(KeyCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
+            string.Equals(InputCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
         _selectedProfile.ModifiedAt = DateTimeOffset.UtcNow;
         await SaveSelectedProfileAsync();
         LoadSelectedBinding();
@@ -1097,7 +1126,7 @@ public partial class MainWindow : Window
         {
             UpdateGlobalStatus("Remapping paused");
             MatchStateText.Text = "Paused";
-            HookStateText.Text = "Keyboard Capture: paused";
+            HookStateText.Text = "Input Capture: paused";
             return;
         }
 
@@ -1117,7 +1146,7 @@ public partial class MainWindow : Window
             }
 
             MatchStateText.Text = string.IsNullOrWhiteSpace(activeWindow.ExecutableName) ? "Waiting" : "Mismatch";
-            HookStateText.Text = _keyboardHook?.IsRunning == true ? "Keyboard Capture: running" : "Keyboard Capture: stopped";
+            HookStateText.Text = _inputHook?.IsRunning == true ? "Input Capture: running" : "Input Capture: stopped";
             if (!IsKeyForgeForeground(activeWindow))
             {
                 AppLog.Info($"{message}. Window='{activeWindow.WindowTitle}' PID={activeWindow.ProcessId}");
@@ -1130,7 +1159,7 @@ public partial class MainWindow : Window
             var warning = $"Needs admin for {activeWindow.ExecutableName}";
             UpdateGlobalStatus(warning);
             MatchStateText.Text = "Needs Admin";
-            HookStateText.Text = _keyboardHook?.IsRunning == true ? "Keyboard Capture: needs admin" : "Keyboard Capture: stopped";
+            HookStateText.Text = _inputHook?.IsRunning == true ? "Input Capture: needs admin" : "Input Capture: stopped";
             AppLog.Info($"{warning}. Active profile stack: {FormatActiveProfileStack(activeProfiles)}.");
             return;
         }
@@ -1138,7 +1167,7 @@ public partial class MainWindow : Window
         var status = $"{FormatActiveProfileStack(activeProfiles)} active";
         UpdateGlobalStatus(status);
         MatchStateText.Text = _remappingEngine?.IsPaused == true ? "Paused" : "Active";
-        HookStateText.Text = _keyboardHook?.IsRunning == true ? "Keyboard Capture: running" : "Keyboard Capture: stopped";
+        HookStateText.Text = _inputHook?.IsRunning == true ? "Input Capture: running" : "Input Capture: stopped";
         AppLog.Info($"{status}. Window='{activeWindow.WindowTitle}' PID={activeWindow.ProcessId} Elevated={activeWindow.IsElevated?.ToString() ?? "unknown"}");
     }
 
@@ -1225,7 +1254,7 @@ public partial class MainWindow : Window
             }
 
             var existing = _selectedProfile.Bindings.FirstOrDefault(binding =>
-                string.Equals(KeyCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
+                string.Equals(InputCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
             _editingBinding = existing?.Clone() ?? new CoreKeyBinding
             {
                 Input = _selectedKey,
@@ -1233,7 +1262,7 @@ public partial class MainWindow : Window
                 BlockOriginal = _settings.BlockOriginalKeyByDefault
             };
 
-            SelectedKeyText.Text = KeyCatalog.LabelFor(_selectedKey);
+            SelectedKeyText.Text = InputCatalog.LabelFor(_selectedKey);
             CurrentBindingText.Text = BindingFormatter.Format(existing);
             BindingTypeComboBox.SelectedItem = _editingBinding.Type;
             BlockOriginalCheckBox.IsChecked = _editingBinding.BlockOriginal;
@@ -1277,9 +1306,9 @@ public partial class MainWindow : Window
     private void UpdateBindingWarning()
     {
         var messages = new List<string>();
-        if (_selectedKey is not null && KeyCatalog.IsRisky(_selectedKey))
+        if (_selectedKey is not null && InputCatalog.IsRisky(_selectedKey))
         {
-            messages.Add($"Warning: remapping {KeyCatalog.LabelFor(_selectedKey)} can affect system or game shortcuts.");
+            messages.Add($"Warning: remapping {InputCatalog.LabelFor(_selectedKey)} can affect system or game shortcuts.");
         }
 
         if (_editingBinding?.Type == BindingType.Macro && _settings.WarnWhenAntiCheatMayBeActive)
@@ -1322,35 +1351,15 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            var binding = _selectedProfile?.Bindings.FirstOrDefault(candidate =>
-                string.Equals(KeyCatalog.Normalize(candidate.Input), definition.Code, StringComparison.OrdinalIgnoreCase));
-            var output = BindingFormatter.Format(binding);
-            var label = binding is null
-                ? definition.Label
-                : $"{definition.Label}{Environment.NewLine}{output}";
+            UpdateInputVisualButton(button, definition.Code, definition.Label);
+        }
 
-            button.Content = new TextBlock
+        foreach (var definition in InputCatalog.MouseVisualButtons)
+        {
+            if (_mouseButtons.TryGetValue(definition.Code, out var button))
             {
-                Text = label,
-                TextAlignment = TextAlignment.Center,
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = binding is null ? 13 : 11,
-                Foreground = WpfBrushes.White
-            };
-
-            button.Background = binding is null
-                ? (WpfBrush)FindResource("KeyboardKeyBrush")
-                : binding.Type == BindingType.Macro
-                    ? (WpfBrush)FindResource("KeyboardKeyMacroBrush")
-                    : (WpfBrush)FindResource("KeyboardKeyMappedBrush");
-            button.BorderBrush = string.Equals(_selectedKey, definition.Code, StringComparison.OrdinalIgnoreCase)
-                ? (WpfBrush)FindResource("AccentBrush")
-                : binding?.Type == BindingType.Disabled
-                    ? (WpfBrush)FindResource("DangerBrush")
-                    : new SolidColorBrush(WpfColor.FromArgb(230, 74, 88, 110));
-            button.BorderThickness = string.Equals(_selectedKey, definition.Code, StringComparison.OrdinalIgnoreCase)
-                ? new Thickness(2)
-                : new Thickness(1);
+                UpdateInputVisualButton(button, definition.Code, definition.Label);
+            }
         }
 
         if (BindingsCountText is not null)
@@ -1359,6 +1368,40 @@ public partial class MainWindow : Window
                 ? "No profile selected"
                 : $"{_selectedProfile.Bindings.Count} bindings";
         }
+    }
+
+    private void UpdateInputVisualButton(WpfButton button, string code, string baseLabel)
+    {
+        var normalized = InputCatalog.Normalize(code);
+        var binding = _selectedProfile?.Bindings.FirstOrDefault(candidate =>
+            string.Equals(InputCatalog.Normalize(candidate.Input), normalized, StringComparison.OrdinalIgnoreCase));
+        var output = BindingFormatter.Format(binding);
+        var label = binding is null
+            ? baseLabel
+            : $"{baseLabel}{Environment.NewLine}{output}";
+
+        button.Content = new TextBlock
+        {
+            Text = label,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = binding is null ? 13 : 11,
+            Foreground = WpfBrushes.White
+        };
+
+        button.Background = binding is null
+            ? (WpfBrush)FindResource("KeyboardKeyBrush")
+            : binding.Type == BindingType.Macro
+                ? (WpfBrush)FindResource("KeyboardKeyMacroBrush")
+                : (WpfBrush)FindResource("KeyboardKeyMappedBrush");
+        button.BorderBrush = string.Equals(_selectedKey, normalized, StringComparison.OrdinalIgnoreCase)
+            ? (WpfBrush)FindResource("AccentBrush")
+            : binding?.Type == BindingType.Disabled
+                ? (WpfBrush)FindResource("DangerBrush")
+                : new SolidColorBrush(WpfColor.FromArgb(230, 74, 88, 110));
+        button.BorderThickness = string.Equals(_selectedKey, normalized, StringComparison.OrdinalIgnoreCase)
+            ? new Thickness(2)
+            : new Thickness(1);
     }
 
     private void ApplyProfileFilter(KeyForgeProfile? keepSelection = null)
@@ -1810,7 +1853,7 @@ public partial class MainWindow : Window
         WpfMessageBox.Show(
             this,
             "KeyForge watches the foreground executable and applies matching enabled profiles.\n\n" +
-            "Use the status chips for active profile, target, foreground app, match state, and keyboard capture state.\n\n" +
+            "Use the status chips for active profile, target, foreground app, match state, and input capture state.\n\n" +
             "Import / Export:\n" +
             "- Export saves the selected profile as a portable KeyForge JSON file.\n" +
             "- Import loads a KeyForge profile JSON into your profile list.\n" +
@@ -2203,22 +2246,22 @@ public partial class MainWindow : Window
     {
         if (_remappingEngine?.IsPaused == true)
         {
-            return "Keyboard Capture: paused";
+            return "Input Capture: paused";
         }
 
-        if (_keyboardHook?.IsRunning != true)
+        if (_inputHook?.IsRunning != true)
         {
-            return "Keyboard Capture: stopped";
+            return "Input Capture: stopped";
         }
 
         if (activeWindow.IsElevated == true && !IsCurrentProcessElevated())
         {
-            return "Keyboard Capture: needs admin for this foreground app";
+            return "Input Capture: needs admin for this foreground app";
         }
 
         return activeProfiles.Count == 0
-            ? "Keyboard Capture: running, waiting for match"
-            : "Keyboard Capture: running";
+            ? "Input Capture: running, waiting for match"
+            : "Input Capture: running";
     }
 
     private static string FormatActiveProfileStack(IReadOnlyList<KeyForgeProfile> activeProfiles)
@@ -2271,7 +2314,7 @@ public partial class MainWindow : Window
 
         modifiers.RemoveAll(modifier => string.Equals(modifier, key, StringComparison.OrdinalIgnoreCase));
 
-        if (KeyCatalog.IsModifier(key) && modifiers.Count == 0)
+        if (InputCatalog.IsModifier(key) && modifiers.Count == 0)
         {
             return [];
         }

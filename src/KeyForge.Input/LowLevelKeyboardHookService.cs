@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace KeyForge.Input;
 
-public sealed class LowLevelKeyboardHookService : IKeyboardHook
+public sealed class LowLevelKeyboardHookService : IInputHook
 {
     private readonly Win32KeyboardNative.LowLevelKeyboardProc _callback;
     private nint _hookHandle;
@@ -14,7 +14,7 @@ public sealed class LowLevelKeyboardHookService : IKeyboardHook
         _callback = HookCallback;
     }
 
-    public event EventHandler<KeyboardHookEventArgs>? KeyEvent;
+    public event EventHandler<InputHookEventArgs>? InputEvent;
 
     public bool IsRunning => _hookHandle != 0;
 
@@ -87,10 +87,10 @@ public sealed class LowLevelKeyboardHookService : IKeyboardHook
         var data = Marshal.PtrToStructure<Win32KeyboardNative.KbdLlHookStruct>(lParam);
         var injected = (data.Flags & (Win32KeyboardNative.LlkhfInjected | Win32KeyboardNative.LlkhfLowerIlInjected)) != 0;
         var key = InputKeyMap.FromVirtualKey((int)data.VkCode, (int)data.ScanCode, data.Flags);
-        var args = new KeyboardHookEventArgs(key, isDown, injected, (int)data.VkCode);
+        var args = new InputHookEventArgs(key, isDown, injected, (int)data.VkCode);
         try
         {
-            KeyEvent?.Invoke(this, args);
+            InputEvent?.Invoke(this, args);
         }
         catch
         {

@@ -225,7 +225,7 @@
                             <Border x:Name="HookStateChip" Style="{StaticResource ChipBorder}" Visibility="Collapsed">
                                 <StackPanel>
                                     <TextBlock Text="CAPTURE" Style="{StaticResource SectionLabel}" />
-                                    <TextBlock x:Name="HookStateText" Text="Keyboard Capture: starting" />
+                                    <TextBlock x:Name="HookStateText" Text="Input Capture: starting" />
                                 </StackPanel>
                             </Border>
                         </WrapPanel>
@@ -616,7 +616,7 @@
                                                    TextWrapping="NoWrap" />
                                         <TextBlock x:Name="DiagnosticsMatchText" Text="Match: unknown" Style="{StaticResource MutedText}" />
                                         <TextBlock x:Name="DiagnosticsHookText"
-                                                   Text="Keyboard Capture: unknown"
+                                                   Text="Input Capture: unknown"
                                                    Style="{StaticResource MutedText}"
                                                    TextTrimming="CharacterEllipsis"
                                                    TextWrapping="NoWrap" />

@@ -2,13 +2,13 @@ namespace KeyForge.Input;
 
 public interface IInputSender
 {
-    IReadOnlyCollection<string> PressedKeys { get; }
+    IReadOnlyCollection<string> PressedInputs { get; }
 
-    void KeyDown(string key);
+    void InputDown(string input);
 
-    void KeyUp(string key);
+    void InputUp(string input);
 
-    Task PressAsync(string key, int holdMs = 12, CancellationToken cancellationToken = default);
+    Task PressInputAsync(string input, int holdMs = 12, CancellationToken cancellationToken = default);
 
     void ReleaseAll();
 }

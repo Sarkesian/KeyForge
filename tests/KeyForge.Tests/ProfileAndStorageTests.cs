@@ -1,4 +1,5 @@
 using System.Text.Json;
+using KeyForge.Core.Input;
 using KeyForge.Core.Models;
 using KeyForge.Core.Services;
 using KeyForge.Core.Validation;
@@ -250,6 +251,46 @@ public sealed class ProfileAndStorageTests
         Assert.Contains("\"type\": \"macro\"", json);
         Assert.Contains("\"action\": \"keyDown\"", json);
         Assert.Contains("\"delayPlacement\": \"before\"", json);
+    }
+
+    [Fact]
+    public void MouseButtonBindingRoundTripsAsStringCode()
+    {
+        var profile = new KeyForgeProfile
+        {
+            ProfileId = "mouse",
+            ProfileName = "Mouse",
+            Bindings =
+            [
+                new KeyBinding
+                {
+                    Input = InputCatalog.MouseRight,
+                    Type = BindingType.Macro,
+                    Output = [MacroStep.Press(InputCatalog.MouseLeft)]
+                }
+            ]
+        };
+
+        var json = JsonSerializer.Serialize(profile, JsonStorageOptions.Default);
+        var roundTrip = JsonSerializer.Deserialize<KeyForgeProfile>(json, JsonStorageOptions.Default);
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(InputCatalog.MouseRight, roundTrip.Bindings[0].Input);
+        Assert.Equal(InputCatalog.MouseLeft, roundTrip.Bindings[0].Output[0].Key);
+        Assert.Contains("\"input\": \"MouseRight\"", json);
+        Assert.Contains("\"key\": \"MouseLeft\"", json);
+    }
+
+    [Fact]
+    public void InputCatalogOptionLabelsAreUnique()
+    {
+        var duplicates = InputCatalog.All
+            .GroupBy(option => option.Label, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+
+        Assert.Empty(duplicates);
     }
 
     [Fact]

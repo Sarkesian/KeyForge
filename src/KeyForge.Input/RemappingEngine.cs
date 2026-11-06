@@ -1,32 +1,33 @@
 using KeyForge.Core.Keyboard;
+using KeyForge.Core.Input;
 using KeyForge.Core.Models;
 
 namespace KeyForge.Input;
 
 public sealed class RemappingEngine : IDisposable
 {
-    private readonly IKeyboardHook _keyboardHook;
+    private readonly IInputHook _inputHook;
     private readonly IInputSender _inputSender;
     private readonly IMacroRunner _macroRunner;
     private readonly AppSettings _settings;
     private readonly object _gate = new();
-    private readonly HashSet<string> _physicalKeysDown = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _physicalInputsDown = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _heldOutputKeys = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CancellationTokenSource> _macroRuns = new(StringComparer.OrdinalIgnoreCase);
     private List<KeyForgeProfile> _activeProfiles = [];
     private bool _disposed;
 
     public RemappingEngine(
-        IKeyboardHook keyboardHook,
+        IInputHook inputHook,
         IInputSender inputSender,
         IMacroRunner macroRunner,
         AppSettings settings)
     {
-        _keyboardHook = keyboardHook;
+        _inputHook = inputHook;
         _inputSender = inputSender;
         _macroRunner = macroRunner;
         _settings = settings;
-        _keyboardHook.KeyEvent += OnKeyboardEvent;
+        _inputHook.InputEvent += OnInputEvent;
     }
 
     public event EventHandler<string>? StatusChanged;
@@ -55,13 +56,13 @@ public sealed class RemappingEngine : IDisposable
 
     public bool IsPaused { get; private set; }
 
-    public void Start() => _keyboardHook.Start();
+    public void Start() => _inputHook.Start();
 
     public void Stop()
     {
         CancelMacros();
         _inputSender.ReleaseAll();
-        _keyboardHook.Stop();
+        _inputHook.Stop();
     }
 
     public void SetActiveProfile(KeyForgeProfile? profile)
@@ -113,21 +114,21 @@ public sealed class RemappingEngine : IDisposable
             return;
         }
 
-        _keyboardHook.KeyEvent -= OnKeyboardEvent;
+        _inputHook.InputEvent -= OnInputEvent;
         CancelMacros();
         _inputSender.ReleaseAll();
-        _keyboardHook.Dispose();
+        _inputHook.Dispose();
         _disposed = true;
     }
 
-    private void OnKeyboardEvent(object? sender, KeyboardHookEventArgs e)
+    private void OnInputEvent(object? sender, InputHookEventArgs e)
     {
         try
         {
-            var key = KeyCatalog.Normalize(e.Key);
-            UpdatePhysicalState(key, e.IsKeyDown);
+            var input = InputCatalog.Normalize(e.Input);
+            UpdatePhysicalState(input, e.IsInputDown);
 
-            if (e.IsKeyDown && IsEmergencyHotkeyDown())
+            if (e.IsInputDown && IsEmergencyHotkeyDown())
             {
                 e.Suppress = true;
                 EmergencyDisable();
@@ -150,7 +151,7 @@ public sealed class RemappingEngine : IDisposable
                 return;
             }
 
-            var binding = FindFirstBinding(profiles, key);
+            var binding = FindFirstBinding(profiles, input);
 
             if (binding is null)
             {
@@ -158,7 +159,7 @@ public sealed class RemappingEngine : IDisposable
             }
 
             e.Suppress = binding.BlockOriginal || binding.Type == BindingType.Disabled;
-            ApplyBinding(binding, e.IsKeyDown);
+            ApplyBinding(binding, e.IsInputDown);
         }
         catch (Exception ex)
         {
@@ -213,14 +214,14 @@ public sealed class RemappingEngine : IDisposable
                 return;
             }
 
-            _inputSender.KeyDown(outputKey);
+            _inputSender.InputDown(outputKey);
             _heldOutputKeys[binding.Input] = [outputKey];
         }
         else if (_heldOutputKeys.Remove(binding.Input, out var heldKeys))
         {
             foreach (var held in heldKeys.AsEnumerable().Reverse())
             {
-                _inputSender.KeyUp(held);
+                _inputSender.InputUp(held);
             }
         }
     }
@@ -244,7 +245,7 @@ public sealed class RemappingEngine : IDisposable
                     {
                         await _macroRunner.RunAsync(binding.Output, cts.Token);
                     }
-                    while (binding.RepeatWhileHeld && !cts.IsCancellationRequested && IsPhysicalKeyDown(binding.Input));
+                        while (binding.RepeatWhileHeld && !cts.IsCancellationRequested && IsPhysicalInputDown(binding.Input));
                 }
                 catch (OperationCanceledException)
                 {
@@ -287,20 +288,20 @@ public sealed class RemappingEngine : IDisposable
         {
             if (isDown)
             {
-                _physicalKeysDown.Add(key);
+                _physicalInputsDown.Add(key);
             }
             else
             {
-                _physicalKeysDown.Remove(key);
+                _physicalInputsDown.Remove(key);
             }
         }
     }
 
-    private bool IsPhysicalKeyDown(string key)
+    private bool IsPhysicalInputDown(string key)
     {
         lock (_gate)
         {
-            return _physicalKeysDown.Contains(KeyCatalog.Normalize(key));
+            return _physicalInputsDown.Contains(InputCatalog.Normalize(key));
         }
     }
 
@@ -308,9 +309,9 @@ public sealed class RemappingEngine : IDisposable
     {
         lock (_gate)
         {
-            var ctrl = _physicalKeysDown.Contains("LeftCtrl") || _physicalKeysDown.Contains("RightCtrl");
-            var shift = _physicalKeysDown.Contains("LeftShift") || _physicalKeysDown.Contains("RightShift");
-            return ctrl && shift && _physicalKeysDown.Contains("F12");
+            var ctrl = _physicalInputsDown.Contains("LeftCtrl") || _physicalInputsDown.Contains("RightCtrl");
+            var shift = _physicalInputsDown.Contains("LeftShift") || _physicalInputsDown.Contains("RightShift");
+            return ctrl && shift && _physicalInputsDown.Contains("F12");
         }
     }
 
@@ -335,7 +336,7 @@ public sealed class RemappingEngine : IDisposable
             }
 
             var binding = profile.Bindings.FirstOrDefault(candidate =>
-                string.Equals(KeyCatalog.Normalize(candidate.Input), key, StringComparison.OrdinalIgnoreCase));
+                string.Equals(InputCatalog.Normalize(candidate.Input), key, StringComparison.OrdinalIgnoreCase));
             if (binding is not null)
             {
                 return binding;

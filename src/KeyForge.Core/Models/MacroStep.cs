@@ -1,3 +1,5 @@
+using KeyForge.Core.Input;
+
 namespace KeyForge.Core.Models;
 
 public sealed class MacroStep
@@ -47,13 +49,14 @@ public sealed class MacroStep
         var timing = Action == MacroStepAction.Wait || DelayMs is not > 0
             ? string.Empty
             : $" ({DelayPlacement.ToString().ToLowerInvariant()} {DelayMs}ms)";
+        var target = InputCatalog.LabelFor(Key);
 
         return Action switch
         {
             MacroStepAction.Wait => $"Wait {DelayMs ?? 0}ms",
-            MacroStepAction.KeyDown => $"Key Down: {Key ?? "?"}{timing}",
-            MacroStepAction.KeyUp => $"Key Up: {Key ?? "?"}{timing}",
-            _ => $"Press: {Key ?? "?"}{timing}"
+            MacroStepAction.KeyDown => $"Down: {target}{timing}",
+            MacroStepAction.KeyUp => $"Up: {target}{timing}",
+            _ => $"Press: {target}{timing}"
         };
     }
 }

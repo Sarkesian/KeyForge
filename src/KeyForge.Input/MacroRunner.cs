@@ -30,14 +30,14 @@ public sealed class MacroRunner : IMacroRunner
                 case MacroStepAction.KeyDown:
                     if (!string.IsNullOrWhiteSpace(step.Key))
                     {
-                        _inputSender.KeyDown(step.Key);
+                        _inputSender.InputDown(step.Key);
                     }
 
                     break;
                 case MacroStepAction.KeyUp:
                     if (!string.IsNullOrWhiteSpace(step.Key))
                     {
-                        _inputSender.KeyUp(step.Key);
+                        _inputSender.InputUp(step.Key);
                     }
 
                     break;
@@ -48,7 +48,7 @@ public sealed class MacroRunner : IMacroRunner
                 default:
                     if (!string.IsNullOrWhiteSpace(step.Key))
                     {
-                        await _inputSender.PressAsync(step.Key, cancellationToken: cancellationToken);
+                        await _inputSender.PressInputAsync(step.Key, cancellationToken: cancellationToken);
                     }
 
                     break;

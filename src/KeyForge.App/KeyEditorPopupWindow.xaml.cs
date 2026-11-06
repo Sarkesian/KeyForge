@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using KeyForge.Core.Keyboard;
+using KeyForge.Core.Input;
 using KeyForge.Core.Models;
 using KeyForge.Core.Services;
 using KeyForge.Core.Validation;
@@ -13,10 +14,12 @@ using KeyForge.Storage;
 using CoreKeyBinding = KeyForge.Core.Models.KeyBinding;
 using WpfDragEventArgs = System.Windows.DragEventArgs;
 using WpfDragDropEffects = System.Windows.DragDropEffects;
+using WpfBrush = System.Windows.Media.Brush;
 using WpfKeyEventArgs = System.Windows.Input.KeyEventArgs;
 using WpfMessageBox = System.Windows.MessageBox;
 using WpfMouseEventArgs = System.Windows.Input.MouseEventArgs;
 using WpfPoint = System.Windows.Point;
+using WpfButton = System.Windows.Controls.Button;
 using WpfTextBox = System.Windows.Controls.TextBox;
 
 namespace KeyForge.App;
@@ -36,10 +39,12 @@ public partial class KeyEditorPopupWindow : Window
     private readonly IProfileRepository _profileRepository;
     private readonly IMacroRunner? _macroRunner;
     private readonly ObservableCollection<MacroStep> _macroSteps = [];
+    private readonly Dictionary<string, WpfButton> _macroVisualButtons = new(StringComparer.OrdinalIgnoreCase);
     private WpfPoint _dragStartPoint;
     private KeyForgeProfile? _profile;
     private CoreKeyBinding? _editingBinding;
     private string? _selectedKey;
+    private string _macroPickerMode = "Capture";
     private CaptureMode _captureMode;
     private bool _isLoadingUi;
 
@@ -49,10 +54,7 @@ public partial class KeyEditorPopupWindow : Window
         _profileRepository = profileRepository;
         _macroRunner = macroRunner;
         MacroActions = Enum.GetValues<MacroStepAction>();
-        MacroKeys = KeyCatalog.All
-            .OrderBy(key => key.Label, StringComparer.OrdinalIgnoreCase)
-            .Select(key => new KeyOption(key.Code, key.Label))
-            .ToList();
+        MacroKeys = InputCatalog.All;
         DelayPlacements = Enum.GetValues<MacroStepDelayPlacement>();
 
         InitializeComponent();
@@ -61,11 +63,13 @@ public partial class KeyEditorPopupWindow : Window
         MacroKeyComboBox.ItemsSource = MacroKeys;
         MacroDelayPlacementComboBox.ItemsSource = DelayPlacements;
         MacroStepsListBox.ItemsSource = _macroSteps;
+        BuildMacroVisualPicker();
+        SetMacroPickerMode("Capture");
     }
 
     public IReadOnlyList<MacroStepAction> MacroActions { get; }
 
-    public IReadOnlyList<KeyOption> MacroKeys { get; }
+    public IReadOnlyList<InputOption> MacroKeys { get; }
 
     public IReadOnlyList<MacroStepDelayPlacement> DelayPlacements { get; }
 
@@ -82,9 +86,9 @@ public partial class KeyEditorPopupWindow : Window
     public void Load(KeyForgeProfile profile, string selectedKey)
     {
         _profile = profile;
-        _selectedKey = KeyCatalog.Normalize(selectedKey);
+        _selectedKey = InputCatalog.Normalize(selectedKey);
         TitleText.Text = "Binding Editor";
-        SelectedKeyText.Text = KeyCatalog.LabelFor(_selectedKey);
+        SelectedKeyText.Text = InputCatalog.LabelFor(_selectedKey);
         LoadSelectedBinding();
         QueueLayoutSizeChanged();
     }
@@ -101,7 +105,7 @@ public partial class KeyEditorPopupWindow : Window
             }
 
             var existing = _profile.Bindings.FirstOrDefault(binding =>
-                string.Equals(KeyCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
+                string.Equals(InputCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
             _editingBinding = existing?.Clone() ?? new CoreKeyBinding
             {
                 Input = _selectedKey,
@@ -124,7 +128,7 @@ public partial class KeyEditorPopupWindow : Window
                 step.Action != MacroStepAction.Wait &&
                 step.DelayMs is > 0);
             MacroActionComboBox.SelectedItem = MacroStepAction.Press;
-            MacroKeyComboBox.SelectedValue = "A";
+            SetMacroTarget("A");
             MacroDelayPlacementComboBox.SelectedItem = MacroStepDelayPlacement.After;
             MacroDelayTextBox.Text = "0";
             UpdateComposerVisibility();
@@ -171,14 +175,24 @@ public partial class KeyEditorPopupWindow : Window
         }
 
         var type = TypeFromMode(BindingModeComboBox.SelectedItem as string);
-        _captureMode = type == BindingType.Combo ? CaptureMode.Combo : CaptureMode.Simple;
-        CurrentBindingText.Text = _captureMode == CaptureMode.Combo ? "Listening for combo..." : "Listening for key...";
+        _captureMode = type switch
+        {
+            BindingType.Combo => CaptureMode.Combo,
+            BindingType.Macro => CaptureMode.MacroTarget,
+            _ => CaptureMode.Simple
+        };
+        CurrentBindingText.Text = _captureMode switch
+        {
+            CaptureMode.Combo => "Listening for combo...",
+            CaptureMode.MacroTarget => "Listening for macro target...",
+            _ => "Listening for key or mouse..."
+        };
         Focus();
     }
 
     private async void Window_PreviewKeyDown(object sender, WpfKeyEventArgs e)
     {
-        if (_captureMode == CaptureMode.None || _editingBinding is null)
+        if (_captureMode == CaptureMode.None)
         {
             return;
         }
@@ -189,9 +203,45 @@ public partial class KeyEditorPopupWindow : Window
             return;
         }
 
+        await ApplyCapturedInputAsync(key);
+        e.Handled = true;
+    }
+
+    private async void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_captureMode == CaptureMode.None)
+        {
+            return;
+        }
+
+        var input = WpfMouseButtonToInput(e.ChangedButton);
+        if (input is null)
+        {
+            return;
+        }
+
+        await ApplyCapturedInputAsync(input);
+        e.Handled = true;
+    }
+
+    private async Task ApplyCapturedInputAsync(string input)
+    {
+        if (_captureMode == CaptureMode.MacroTarget)
+        {
+            SetMacroTarget(input);
+            _captureMode = CaptureMode.None;
+            CurrentBindingText.Text = BindingFormatter.Format(_editingBinding);
+            return;
+        }
+
+        if (_editingBinding is null)
+        {
+            return;
+        }
+
         if (_captureMode == CaptureMode.Combo)
         {
-            var steps = BuildComboSteps(key);
+            var steps = BuildComboSteps(input);
             if (steps.Count == 0)
             {
                 return;
@@ -202,17 +252,10 @@ public partial class KeyEditorPopupWindow : Window
             _macroSteps.Clear();
             BindingModeComboBox.SelectedItem = ModeFromBinding(_editingBinding.Type);
         }
-        else if (TypeFromMode(BindingModeComboBox.SelectedItem as string) == BindingType.Macro)
-        {
-            var step = MacroStep.Press(key);
-            _macroSteps.Add(step);
-            _editingBinding.Type = BindingType.Macro;
-            _editingBinding.Output = _macroSteps.Select(item => item.Clone()).ToList();
-        }
         else
         {
             _editingBinding.Type = BindingType.Simple;
-            _editingBinding.Output = [MacroStep.Press(key)];
+            _editingBinding.Output = [MacroStep.Press(input)];
             _macroSteps.Clear();
             BindingModeComboBox.SelectedItem = "Keybind";
         }
@@ -220,7 +263,6 @@ public partial class KeyEditorPopupWindow : Window
         _captureMode = CaptureMode.None;
         UpdatePreview();
         await SaveCurrentBindingAsync(reloadAfterSave: true);
-        e.Handled = true;
     }
 
     private async void AddStepButton_Click(object sender, RoutedEventArgs e)
@@ -316,6 +358,39 @@ public partial class KeyEditorPopupWindow : Window
         }
 
         UpdateComposerVisibility();
+    }
+
+    private void MacroPickerModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is string mode)
+        {
+            SetMacroPickerMode(mode);
+        }
+    }
+
+    private void MacroListenButton_Click(object sender, RoutedEventArgs e)
+    {
+        _captureMode = CaptureMode.MacroTarget;
+        MacroCaptureStatusText.Text = "Listening...";
+        Focus();
+    }
+
+    private void MacroTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isLoadingUi || MacroKeyComboBox.SelectedValue is not string input)
+        {
+            return;
+        }
+
+        SetMacroTarget(input);
+    }
+
+    private void MacroVisualTargetButton_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is string input)
+        {
+            SetMacroTarget(input);
+        }
     }
 
     private void MacroStepsListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -439,7 +514,7 @@ public partial class KeyEditorPopupWindow : Window
         }
 
         _profile.Bindings.RemoveAll(binding =>
-            string.Equals(KeyCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
+            string.Equals(InputCatalog.Normalize(binding.Input), _selectedKey, StringComparison.OrdinalIgnoreCase));
         _profile.ModifiedAt = DateTimeOffset.UtcNow;
         await _profileRepository.SaveAsync(_profile);
         ProfileChanged?.Invoke(this, _profile);
@@ -487,7 +562,7 @@ public partial class KeyEditorPopupWindow : Window
         var isWait = MacroActionComboBox.SelectedItem is MacroStepAction.Wait;
         var showNonWaitTiming = !isWait && ShowMacroTimingDetails;
 
-        MacroKeyComboBox.Visibility = isWait ? Visibility.Collapsed : Visibility.Visible;
+        SelectedMacroTargetBox.Visibility = isWait ? Visibility.Collapsed : Visibility.Visible;
         MacroDelayPlacementHost.Visibility = isWait || showNonWaitTiming ? Visibility.Visible : Visibility.Collapsed;
         MacroDelayPlacementComboBox.Visibility = showNonWaitTiming ? Visibility.Visible : Visibility.Collapsed;
         MacroWaitOnlyText.Visibility = isWait ? Visibility.Visible : Visibility.Collapsed;
@@ -504,6 +579,142 @@ public partial class KeyEditorPopupWindow : Window
         else if (!isWait && string.IsNullOrWhiteSpace(MacroDelayTextBox.Text))
         {
             MacroDelayTextBox.Text = "0";
+        }
+
+        SetMacroPickerMode(_macroPickerMode);
+    }
+
+    private void SetMacroPickerMode(string mode)
+    {
+        var normalized = string.Equals(mode, "Visual", StringComparison.OrdinalIgnoreCase)
+            ? "Visual"
+            : string.Equals(mode, "List", StringComparison.OrdinalIgnoreCase)
+                ? "List"
+                : "Capture";
+        _macroPickerMode = normalized;
+        var targetVisible = MacroActionComboBox.SelectedItem is not MacroStepAction.Wait;
+
+        MacroCapturePanel.Visibility = targetVisible && normalized == "Capture" ? Visibility.Visible : Visibility.Collapsed;
+        MacroVisualPanel.Visibility = targetVisible && normalized == "Visual" ? Visibility.Visible : Visibility.Collapsed;
+        MacroKeyComboBox.Visibility = targetVisible && normalized == "List" ? Visibility.Visible : Visibility.Collapsed;
+
+        SetPickerButtonState(MacroCaptureModeButton, normalized == "Capture");
+        SetPickerButtonState(MacroVisualModeButton, normalized == "Visual");
+        SetPickerButtonState(MacroListModeButton, normalized == "List");
+        QueueLayoutSizeChanged();
+    }
+
+    private void SetPickerButtonState(WpfButton button, bool selected)
+    {
+        button.Background = selected
+            ? (WpfBrush)FindResource("AccentSoftBrush")
+            : (WpfBrush)FindResource("PanelAltBrush");
+        button.BorderBrush = selected
+            ? (WpfBrush)FindResource("AccentBrush")
+            : (WpfBrush)FindResource("BorderBrush");
+    }
+
+    private void SetMacroTarget(string input)
+    {
+        var normalized = InputCatalog.Normalize(input);
+        if (!InputCatalog.IsKnown(normalized))
+        {
+            return;
+        }
+
+        if (!string.Equals(MacroKeyComboBox.SelectedValue as string, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            MacroKeyComboBox.SelectedValue = normalized;
+        }
+
+        SelectedMacroTargetText.Text = InputCatalog.LabelFor(normalized);
+        MacroCaptureStatusText.Text = $"{InputCatalog.LabelFor(normalized)} selected.";
+        UpdateMacroVisualSelection(normalized);
+    }
+
+    private void BuildMacroVisualPicker()
+    {
+        MacroVisualHost.Children.Clear();
+        _macroVisualButtons.Clear();
+
+        const double keyWidth = 26;
+        const double keyHeight = 22;
+        const double gap = 3;
+        const double rowGap = 4;
+        var canvas = new Canvas { SnapsToDevicePixels = true };
+        double maxRight = 0;
+        double maxBottom = 0;
+
+        foreach (var key in KeyboardLayout.VisualKeys)
+        {
+            AddMacroVisualButton(canvas, key.Code, key.Label, key.X, key.Y, key.Width, key.Height, keyWidth, keyHeight, gap, rowGap, ref maxRight, ref maxBottom);
+        }
+
+        foreach (var button in InputCatalog.MouseVisualButtons)
+        {
+            AddMacroVisualButton(canvas, button.Code, button.Label, button.X, button.Y, button.Width, button.Height, keyWidth, keyHeight, gap, rowGap, ref maxRight, ref maxBottom);
+        }
+
+        canvas.Width = maxRight;
+        canvas.Height = maxBottom;
+        MacroVisualHost.Width = maxRight;
+        MacroVisualHost.Height = maxBottom;
+        MacroVisualHost.Children.Add(canvas);
+    }
+
+    private void AddMacroVisualButton(
+        Canvas canvas,
+        string code,
+        string label,
+        double x,
+        double y,
+        double widthUnits,
+        double heightUnits,
+        double keyWidth,
+        double keyHeight,
+        double gap,
+        double rowGap,
+        ref double maxRight,
+        ref double maxBottom)
+    {
+        var width = widthUnits * keyWidth + Math.Max(0, widthUnits - 1) * gap;
+        var height = heightUnits * keyHeight + Math.Max(0, heightUnits - 1) * rowGap;
+        var left = x * (keyWidth + gap);
+        var top = y * (keyHeight + rowGap);
+        var button = new WpfButton
+        {
+            Width = width,
+            Height = height,
+            Tag = code,
+            Content = label,
+            Padding = new Thickness(1),
+            Margin = new Thickness(0),
+            FontSize = 8,
+            FontWeight = FontWeights.SemiBold,
+            ToolTip = InputCatalog.LabelFor(code)
+        };
+
+        button.Click += MacroVisualTargetButton_Click;
+        Canvas.SetLeft(button, left);
+        Canvas.SetTop(button, top);
+        canvas.Children.Add(button);
+        _macroVisualButtons[code] = button;
+        maxRight = Math.Max(maxRight, left + width);
+        maxBottom = Math.Max(maxBottom, top + height);
+    }
+
+    private void UpdateMacroVisualSelection(string selectedInput)
+    {
+        foreach (var (code, button) in _macroVisualButtons)
+        {
+            var selected = string.Equals(code, selectedInput, StringComparison.OrdinalIgnoreCase);
+            button.Background = selected
+                ? (WpfBrush)FindResource("AccentSoftBrush")
+                : (WpfBrush)FindResource("KeyboardKeyBrush");
+            button.BorderBrush = selected
+                ? (WpfBrush)FindResource("AccentBrush")
+                : (WpfBrush)FindResource("BorderBrush");
+            button.BorderThickness = selected ? new Thickness(2) : new Thickness(1);
         }
     }
 
@@ -526,9 +737,9 @@ public partial class KeyEditorPopupWindow : Window
     private void UpdateWarning()
     {
         var messages = new List<string>();
-        if (_selectedKey is not null && KeyCatalog.IsRisky(_selectedKey))
+        if (_selectedKey is not null && InputCatalog.IsRisky(_selectedKey))
         {
-            messages.Add($"{KeyCatalog.LabelFor(_selectedKey)} can affect system or game shortcuts.");
+            messages.Add($"{InputCatalog.LabelFor(_selectedKey)} can affect system or game shortcuts.");
         }
 
         if (string.Equals(BindingModeComboBox.SelectedItem as string, "Macro", StringComparison.OrdinalIgnoreCase) &&
@@ -601,7 +812,7 @@ public partial class KeyEditorPopupWindow : Window
             return;
         }
 
-        step.Key = string.IsNullOrWhiteSpace(step.Key) ? "A" : KeyCatalog.Normalize(step.Key);
+        step.Key = string.IsNullOrWhiteSpace(step.Key) ? "A" : InputCatalog.Normalize(step.Key);
         if (step.DelayMs is not > 0)
         {
             step.DelayMs = null;
@@ -676,7 +887,7 @@ public partial class KeyEditorPopupWindow : Window
 
         modifiers.RemoveAll(modifier => string.Equals(modifier, key, StringComparison.OrdinalIgnoreCase));
 
-        if (KeyCatalog.IsModifier(key) && modifiers.Count == 0)
+        if (InputCatalog.IsModifier(key) && modifiers.Count == 0)
         {
             return [];
         }
@@ -770,6 +981,17 @@ public partial class KeyEditorPopupWindow : Window
         };
     }
 
+    private static string? WpfMouseButtonToInput(MouseButton button)
+    {
+        return button switch
+        {
+            MouseButton.Left => InputCatalog.MouseLeft,
+            MouseButton.Right => InputCatalog.MouseRight,
+            MouseButton.Middle => InputCatalog.MouseMiddle,
+            _ => null
+        };
+    }
+
     private static T? FindVisualParent<T>(DependencyObject? child)
         where T : DependencyObject
     {
@@ -813,15 +1035,11 @@ public partial class KeyEditorPopupWindow : Window
         };
     }
 
-    public sealed record KeyOption(string Code, string Label)
-    {
-        public override string ToString() => Label;
-    }
-
     private enum CaptureMode
     {
         None,
         Simple,
-        Combo
+        Combo,
+        MacroTarget
     }
 }
