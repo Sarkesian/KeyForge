@@ -2,6 +2,12 @@
 
 KeyForge is a Windows desktop app for per-game keyboard remapping profiles. It provides a WPF visual keyboard editor, JSON-backed profiles, active-window profile switching, real low-level keyboard hooks, `SendInput` output, short macros, a tray menu, and an emergency disable hotkey.
 
+Built with C# and .NET 9 for Windows. This repository retains its original Git history and version tags.
+
+## Code Map
+
+The solution separates the WPF application from profile validation, JSON storage, process matching, and keyboard input handling. Tests live under `tests/`; packaging and update scripts live under `scripts/`. Building the desktop application requires Windows and the .NET 9 SDK.
+
 ## Build And Run
 
 ```powershell
